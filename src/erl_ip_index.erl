@@ -2,13 +2,13 @@
 -compile([no_native]).
 
 -export([
-    init/0,
-    build_index/2,
     async_build_index/2,
+    build_index/2,
+    index_info/1,
+    init/0,
     lookup_ip/2,
     lookup_subnet/3,
-    lookup_subnet_nif/3,
-    index_info/1
+    lookup_subnet_nif/3
 ]).
 
 -on_load(init/0).
@@ -18,32 +18,10 @@
 -type mask() :: 8..32.
 -type idx_resource() :: binary().
 
--spec init() -> ok.
-init() ->
-    SoName = filename:join(priv_dir(), "ip_index_nif"),
-    case catch erlang:load_nif(SoName,[]) of
-        ok -> ok;
-        LoadError -> error_logger:error_msg("erl_ip_index: error loading NIF (~p): ~p",
-                                            [SoName, LoadError])
-    end.
+%% public
+-spec async_build_index(ip_lists(), pos_integer()) ->
+    idx_resource().
 
-priv_dir() ->
-    case code:priv_dir(?MODULE) of
-        {error, _} ->
-            EbinDir = filename:dirname(code:which(?MODULE)),
-            AppPath = filename:dirname(EbinDir),
-            filename:join(AppPath, "priv");
-        Dir -> Dir
-    end.
-
--spec build_index(ip_lists(), pos_integer()) -> idx_resource().
-build_index(IpLists, LargeListThreshold) ->
-    case build_index_nif(IpLists, LargeListThreshold) of
-        undefined -> error(badarg);
-        Result -> Result
-    end.
-
--spec async_build_index(ip_lists(), pos_integer()) -> idx_resource().
 async_build_index(IpLists, LargeListThreshold) ->
     {Ref, Tid} = async_start_build_index_nif(IpLists, LargeListThreshold),
     receive
@@ -55,8 +33,57 @@ async_build_index(IpLists, LargeListThreshold) ->
             Result
     end.
 
-split_ip(Ip) when is_binary(Ip) ->
-    list_to_tuple([binary_to_integer(X) || X <- binary:split(Ip, <<".">>, [global])]).
+-spec build_index(ip_lists(), pos_integer()) ->
+    idx_resource().
+
+build_index(IpLists, LargeListThreshold) ->
+    case build_index_nif(IpLists, LargeListThreshold) of
+        undefined ->
+            error(badarg);
+        Result ->
+            Result
+    end.
+
+-spec index_info(idx_resource()) ->
+    any().
+
+index_info(_Index) ->
+    erlang:nif_error(ip_index_nif_not_loaded).
+
+-spec init() -> ok.
+
+init() ->
+    SoName = filename:join(priv_dir(), "ip_index_nif"),
+    case catch erlang:load_nif(SoName,[]) of
+        ok -> ok;
+        LoadError -> error_logger:error_msg("erl_ip_index: error loading NIF (~p): ~p",
+                                            [SoName, LoadError])
+    end.
+
+-spec lookup_ip(idx_resource(), ip_address()) ->
+    list({integer(),integer()}).
+
+lookup_ip(Index, Ip) ->
+    lookup_subnet(Index, Ip, 32).
+
+-spec lookup_subnet(idx_resource(), ip_address(), mask()) ->
+    list({integer(),integer()}).
+
+lookup_subnet(Index, Ip, Mask) when is_integer(Mask), Mask >= 8, Mask =< 32 ->
+    lookup_subnet_nif(Index, parse_ip(Ip), Mask).
+
+%% private
+async_start_build_index_nif(_Lists, _LargeListThreshold) ->
+    erlang:nif_error(ip_index_nif_not_loaded).
+
+async_finish_build_index_nif(_Tid) ->
+    erlang:nif_error(ip_index_nif_not_loaded).
+
+build_index_nif(_IpLists, _LargeListThreshold) ->
+    erlang:nif_error(ip_index_nif_not_loaded).
+
+lookup_subnet_nif(_Index, _Ip, _Offset) ->
+    erlang:nif_error(ip_index_nif_not_loaded).
 
 parse_ip({A, B, C, D}) when is_integer(A), A >= 0, A =< 255,
                             is_integer(B), B >= 0, B =< 255,
@@ -66,28 +93,18 @@ parse_ip({A, B, C, D}) when is_integer(A), A >= 0, A =< 255,
 parse_ip(Ip) when is_binary(Ip) ->
     parse_ip(split_ip(Ip));
 parse_ip(Ip) when is_list(Ip) ->
-    parse_ip(list_to_binary(Ip)).
+    parse_ip(list_to_binary(Ip));
+parse_ip(Ip) when is_integer(Ip) ->
+    Ip.
 
--spec lookup_subnet(idx_resource(), ip_address(), mask()) -> list({integer(),integer()}).
-lookup_subnet(Index, Ip, Mask) when is_integer(Mask), Mask >= 8, Mask =< 32 ->
-    lookup_subnet_nif(Index, parse_ip(Ip), Mask).
+priv_dir() ->
+    case code:priv_dir(?MODULE) of
+        {error, _} ->
+            EbinDir = filename:dirname(code:which(?MODULE)),
+            AppPath = filename:dirname(EbinDir),
+            filename:join(AppPath, "priv");
+        Dir -> Dir
+    end.
 
--spec lookup_ip(idx_resource(), ip_address()) -> list({integer(),integer()}).
-lookup_ip(Index, Ip) ->
-    lookup_subnet(Index, Ip, 32).
-
--spec index_info(idx_resource()) -> any().
-index_info(_Index) ->
-    erlang:nif_error(ip_index_nif_not_loaded).
-
-build_index_nif(_IpLists, _LargeListThreshold) ->
-    erlang:nif_error(ip_index_nif_not_loaded).
-
-lookup_subnet_nif(_Index, _Ip, _Offset) ->
-    erlang:nif_error(ip_index_nif_not_loaded).
-
-async_start_build_index_nif(_Lists, _LargeListThreshold) ->
-    erlang:nif_error(ip_index_nif_not_loaded).
-
-async_finish_build_index_nif(_Tid) ->
-    erlang:nif_error(ip_index_nif_not_loaded).
+split_ip(Ip) when is_binary(Ip) ->
+    list_to_tuple([binary_to_integer(X) || X <- binary:split(Ip, <<".">>, [global])]).
